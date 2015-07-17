@@ -1454,7 +1454,10 @@ GetGlobalObjectTemplate()
 
 		Handle<ObjectTemplate>	plv8 = ObjectTemplate::New();
 
-		SetupPlv8Functions(plv8);
+        Handle<ObjectTemplate>	modules = ObjectTemplate::New();
+        templ->Set(String::NewFromUtf8(plv8_isolate, "modules", String::kInternalizedString), modules);
+
+        SetupPlv8Functions(plv8);
 		plv8->Set(String::NewFromUtf8(plv8_isolate, "version", String::kInternalizedString), String::NewFromUtf8(plv8_isolate, PLV8_VERSION));
 
 		templ->Set(String::NewFromUtf8(plv8_isolate, "plv8", String::kInternalizedString), plv8);
