@@ -252,16 +252,16 @@ plv8_Req(const FunctionCallbackInfo<v8::Value>& args)
     if (args.Length() >= 1) {
 
         std::ifstream jsfile(path.str(""));
-            if (!jsfile)
-            {
-                 elog(INFO, "no js file %s", path.str(""));
-                 args.GetReturnValue().Set(v8::Null(plv8_isolate));
-                 return;
-            }else{
-                std::string code_t((std::istreambuf_iterator<char>(jsfile)),
-                                 std::istreambuf_iterator<char>());
-                code = code_t;
-            }
+        if (!jsfile)
+        {
+            elog(INFO, "no js file %s", path.str(""));
+            args.GetReturnValue().Set(v8::Null(plv8_isolate));
+            return;
+        }else{
+            std::string code_t((std::istreambuf_iterator<char>(jsfile)),
+                               std::istreambuf_iterator<char>());
+            code = code_t;
+        }
     }
     Local<v8::Context> context = plv8_isolate->GetCurrentContext();
     Handle<v8::Object> object = Local<v8::Object>::Cast(context->Global()->Get(String::NewFromUtf8(plv8_isolate, "modules", v8::String::kInternalizedString)));
@@ -271,31 +271,34 @@ plv8_Req(const FunctionCallbackInfo<v8::Value>& args)
         return;
     }
 
-    code = std::string("(function(){ var exports = {}; var SCOPE = null; var modules = null; try {")
-            + code + std::string("} catch(e){return null;} return exports; })();");
+    code = std::string("(function(){ var exports = {}; var SCOPE = null; var modules = null; ")
+            + code + std::string(" return exports; })();");
 
 
-//    Local<Context> context = Context::New(plv8_isolate);
-//    Context::Scope context_scope(context);
+    //    Local<Context> context = Context::New(plv8_isolate);
+    //    Context::Scope context_scope(context);
 
-    Local<v8::Script> script = v8::Script::Compile(String::NewFromUtf8(plv8_isolate,
-          code.c_str()
-      , String::kInternalizedString));
-
+    v8::ScriptOrigin origin(args[0]);
 
     TryCatch trycatch(plv8_isolate);
-      Local<v8::Value> result = script->Run();
+    Local<v8::Script> script = v8::Script::Compile(String::NewFromUtf8(plv8_isolate,
+                                                                       code.c_str()
+                                                                       , String::kInternalizedString), &origin);
 
-        if (result.IsEmpty()) {
-          Local<v8::Value> exception = trycatch.Exception();
-          v8::String::Utf8Value exception_str(exception);
-          elog(ERROR, "File %s Exception: %s\n",path.str(""), *exception_str );
-          args.GetReturnValue().Set(plv8_isolate->ThrowException(exception));
-          return;
-        }
+    if (script.IsEmpty()) {
+        args.GetReturnValue().Set(trycatch.ReThrow());
+        return;
+    }
 
-      object->Set(args[0], result);
-      args.GetReturnValue().Set(result);
+    MaybeLocal<v8::Value> result = script->Run(context);
+
+    if (result.IsEmpty()){
+        args.GetReturnValue().Set(trycatch.ReThrow());
+        return;
+    }
+
+    object->Set(args[0], result.ToLocalChecked());
+    args.GetReturnValue().Set(result.ToLocalChecked());
 
 }
 
@@ -360,7 +363,7 @@ plv8_Elog(const FunctionCallbackInfo<v8::Value>& args)
 {
 	MemoryContext	ctx = CurrentMemoryContext;
 
-	if (args.Length() < 2) {
+    if (args.Length() < 2) {
 		args.GetReturnValue().Set(plv8_isolate->ThrowException(String::NewFromUtf8(plv8_isolate, "usage: plv8.elog(elevel, ...)")));
 		return;
 	}
@@ -379,7 +382,7 @@ plv8_Elog(const FunctionCallbackInfo<v8::Value>& args)
 	case WARNING:
 	case ERROR:
 		break;
-	default:
+    default:
 		args.GetReturnValue().Set(plv8_isolate->ThrowException(String::NewFromUtf8(plv8_isolate, "invalid error level")));
 		return;
 	}
@@ -397,7 +400,7 @@ plv8_Elog(const FunctionCallbackInfo<v8::Value>& args)
 
 	if (elevel != ERROR)
 	{
-		elog(elevel, "%s", message);
+        elog(elevel, "%s", message);
 		args.GetReturnValue().Set(Undefined(plv8_isolate));
 		return;
 	}
@@ -405,7 +408,7 @@ plv8_Elog(const FunctionCallbackInfo<v8::Value>& args)
 	/* ERROR case */
 	PG_TRY();
 	{
-		elog(elevel, "%s", message);
+        elog(elevel, "%s", message);
 	}
 	PG_CATCH();
 	{
