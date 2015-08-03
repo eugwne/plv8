@@ -236,53 +236,90 @@ JSONObject::Stringify(Handle<v8::Value> val)
 	return stringify_func->Call(m_json, 1, &val);
 }
 
+static Datum string2text (const char *str) {
+  int len = strlen(str);
+  text *dat = (text *) SPI_palloc(len + VARHDRSZ); /* in upper context */
+  SET_VARSIZE(dat, len + VARHDRSZ);
+  memcpy(VARDATA(dat), str, len);
+  return PointerGetDatum(dat);
+}
 
-#include <fstream>
+
 static void
-plv8_Req(const FunctionCallbackInfo<v8::Value>& args)
+plv8_Require(const FunctionCallbackInfo<v8::Value>& args)
 {
+    static const char* querystr = "select code from plv8.modules where module = $1";
+
     if (args.Length() < 1) {
         elog(INFO, "no module name");
         args.GetReturnValue().Set(v8::Null(plv8_isolate));
         return;
     }
-    CString path(args[0]);
 
-    std::string code;
-    if (args.Length() >= 1) {
-
-        std::ifstream jsfile(path.str(""));
-        if (!jsfile)
-        {
-            elog(INFO, "no js file %s", path.str(""));
-            args.GetReturnValue().Set(v8::Null(plv8_isolate));
-            return;
-        }else{
-            std::string code_t((std::istreambuf_iterator<char>(jsfile)),
-                               std::istreambuf_iterator<char>());
-            code = code_t;
-        }
-    }
     Local<v8::Context> context = plv8_isolate->GetCurrentContext();
-    Handle<v8::Object> object = Local<v8::Object>::Cast(context->Global()->Get(String::NewFromUtf8(plv8_isolate, "modules", v8::String::kInternalizedString)));
+    Handle<Object> global = context->Global();
+    Handle<v8::Object> object = Local<v8::Object>::Cast(global->Get(String::NewFromUtf8(plv8_isolate, "modules", v8::String::kInternalizedString)));
     Handle<v8::Value> module = Handle<v8::Value>::Cast(object->Get(args[0]));
     if (! module->IsUndefined() ){
         args.GetReturnValue().Set(module);
         return;
     }
 
-    code = std::string("(function(){ var exports = {}; var SCOPE = null; var modules = null; ")
+    CString path(args[0]);
+    char * db_code = NULL;
+
+    SPI_execute("select 1 from pg_catalog.pg_tables where schemaname='plv8' "
+                             "and tablename='modules'", 1, 0);
+
+    if (SPI_processed == 0) {
+        SPI_freetuptable(SPI_tuptable);
+        elog(ERROR, "no table modules in plv8 schema");
+    }else{
+        SPI_freetuptable(SPI_tuptable);
+
+        int nargs = 1;
+        Oid *types = (Oid *) palloc( sizeof(Oid));
+        Datum *values = (Datum *) palloc( sizeof(Datum));
+        char *nulls = (char *) palloc( sizeof(char));
+
+        types[0] = TEXTOID;
+        values[0] = string2text(path.str());
+        nulls[0] = ' ';
+
+        SPI_execute_with_args(querystr,
+                                       nargs, types,
+                                       values, nulls,
+                                       1, 0);
+        pfree(types);
+        pfree(values);
+        pfree(nulls);
+
+
+        if (SPI_processed == 0) {
+            SPI_freetuptable(SPI_tuptable);
+            elog(ERROR, "no module %s",path.str());
+        }else {
+            char * buf;
+            buf = (SPI_getvalue(SPI_tuptable->vals[0], SPI_tuptable->tupdesc, 1));
+            db_code = (char*)SPI_palloc(strlen(buf)+1);
+            memset(db_code,0,strlen(buf)+1);
+            memcpy(db_code,buf,strlen(buf));
+        }
+    }
+
+    SPI_freetuptable(SPI_tuptable);
+
+    std::string code(db_code);
+    if (db_code) pfree(db_code);
+
+    code = std::string("(function(){ var exports = {}; var modules; ")
             + code + std::string(" return exports; })();");
-
-
-    //    Local<Context> context = Context::New(plv8_isolate);
-    //    Context::Scope context_scope(context);
 
     v8::ScriptOrigin origin(args[0]);
 
     TryCatch trycatch(plv8_isolate);
-    Local<v8::Script> script = v8::Script::Compile(String::NewFromUtf8(plv8_isolate,
-                                                                       code.c_str()
+    Local<v8::Script> script = v8::Script::Compile(String::NewFromUtf8(plv8_isolate
+                                                                       , code.c_str()
                                                                        , String::kInternalizedString), &origin);
 
     if (script.IsEmpty()) {
@@ -318,7 +355,7 @@ SetupPlv8Functions(Handle<ObjectTemplate> plv8)
 	SetCallback(plv8, "quote_literal", plv8_QuoteLiteral, attrFull);
 	SetCallback(plv8, "quote_nullable", plv8_QuoteNullable, attrFull);
 	SetCallback(plv8, "quote_ident", plv8_QuoteIdent, attrFull);
-    SetCallback(plv8, "require", plv8_Req, attrFull);
+    SetCallback(plv8, "require", plv8_Require, attrFull);
 
 	plv8->SetInternalFieldCount(PLV8_INTNL_MAX);
 }
